@@ -11,8 +11,10 @@ server = Server("yt-dlp-mcp-server")
 DOWNLOAD_DIR = os.path.expanduser("~/Downloads/mcp_ytdlp")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-# Custom cookie path (Zen Browser)
-CUSTOM_COOKIE_PATH = os.path.expanduser("/home/aryan/.zen/v2sw3gtd.Default (twilight)/cookies.sqlite")
+# Custom cookie path - Update this path for your browser
+# For Windows Firefox: C:/Users/USERNAME/AppData/Roaming/Mozilla/Firefox/Profiles/XXXXX.default/cookies.sqlite
+# For Windows Chrome: C:/Users/USERNAME/AppData/Local/Google/Chrome/User Data/Default/Network/Cookies
+CUSTOM_COOKIE_PATH = ""  # Leave empty if you want to use browser auto-detection
 
 # Rotate user agents to avoid detection
 USER_AGENTS = [
@@ -42,16 +44,17 @@ def get_base_ytdlp_args(use_oauth=False):
 async def try_download_with_cookies(url, format_str, output_path):
     """
     Try downloading with cookies in this order:
-    1. Custom path (Zen Browser)
+    1. Custom path (if set)
     2. Firefox
     3. Chrome
-    4. No cookies
+    4. Edge
+    5. No cookies
     
     Returns: (success: bool, stdout: str, stderr: str, method: str)
     """
     
     # Method 1: Custom cookie path
-    if os.path.exists(CUSTOM_COOKIE_PATH):
+    if CUSTOM_COOKIE_PATH and os.path.exists(CUSTOM_COOKIE_PATH):
         shell_command = f'yt-dlp --cookies "{CUSTOM_COOKIE_PATH}" -f "{format_str}" -o "{output_path}" "{url}"'
         
         process = await asyncio.create_subprocess_shell(
@@ -93,7 +96,21 @@ async def try_download_with_cookies(url, format_str, output_path):
     if process.returncode == 0:
         return (True, stdout.decode(), stderr.decode(), "chrome")
     
-    # Method 4: No cookies (last resort)
+    # Method 4: Edge cookies (Windows specific)
+    shell_command = f'yt-dlp --cookies-from-browser edge -f "{format_str}" -o "{output_path}" "{url}"'
+    
+    process = await asyncio.create_subprocess_shell(
+        shell_command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    
+    stdout, stderr = await process.communicate()
+    
+    if process.returncode == 0:
+        return (True, stdout.decode(), stderr.decode(), "edge")
+    
+    # Method 5: No cookies (last resort)
     shell_command = f'yt-dlp -f "{format_str}" -o "{output_path}" "{url}"'
     
     process = await asyncio.create_subprocess_shell(
@@ -117,7 +134,7 @@ async def try_audio_download_with_cookies(url, output_path):
     """
     
     # Method 1: Custom cookie path
-    if os.path.exists(CUSTOM_COOKIE_PATH):
+    if CUSTOM_COOKIE_PATH and os.path.exists(CUSTOM_COOKIE_PATH):
         shell_command = f'yt-dlp --cookies "{CUSTOM_COOKIE_PATH}" -x --audio-format mp3 --audio-quality 0 -o "{output_path}" "{url}"'
         
         process = await asyncio.create_subprocess_shell(
@@ -159,7 +176,21 @@ async def try_audio_download_with_cookies(url, output_path):
     if process.returncode == 0:
         return (True, stdout.decode(), stderr.decode(), "chrome")
     
-    # Method 4: No cookies
+    # Method 4: Edge cookies
+    shell_command = f'yt-dlp --cookies-from-browser edge -x --audio-format mp3 --audio-quality 0 -o "{output_path}" "{url}"'
+    
+    process = await asyncio.create_subprocess_shell(
+        shell_command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
+    
+    stdout, stderr = await process.communicate()
+    
+    if process.returncode == 0:
+        return (True, stdout.decode(), stderr.decode(), "edge")
+    
+    # Method 5: No cookies
     shell_command = f'yt-dlp -x --audio-format mp3 --audio-quality 0 -o "{output_path}" "{url}"'
     
     process = await asyncio.create_subprocess_shell(
@@ -238,38 +269,6 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": ["url"]
             }
-        ),
-        Tool(
-            name="control_display",
-            description="Control display settings including brightness, contrast, and input source. Can set brightness/contrast (0-100) or switch input to HDMI/VGA.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "action": {
-                        "type": "string",
-                        "description": "Action to perform: 'brightness' to adjust brightness/contrast, 'switch_input' to change display input",
-                        "enum": ["brightness", "switch_input"]
-                    },
-                    "brightness": {
-                        "type": "integer",
-                        "description": "Brightness level (0-100). If contrast is not specified, it will be set to the same value.",
-                        "minimum": 0,
-                        "maximum": 100
-                    },
-                    "contrast": {
-                        "type": "integer",
-                        "description": "Contrast level (0-100). Optional - defaults to brightness value if not specified.",
-                        "minimum": 0,
-                        "maximum": 100
-                    },
-                    "input_source": {
-                        "type": "string",
-                        "description": "Display input source to switch to",
-                        "enum": ["hdmi", "vga"]
-                    }
-                },
-                "required": ["action"]
-            }
         )
     ]
 
@@ -286,8 +285,6 @@ async def call_tool(name: str, arguments: dict):
         return await handle_audio_download(arguments)
     elif name == "get_video_info":
         return await handle_video_info(arguments)
-    elif name == "control_display":
-        return await handle_display_control(arguments)
     else:
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
@@ -377,9 +374,10 @@ async def handle_download(arguments: dict):
         
         if success:
             method_names = {
-                "custom_path": "Zen Browser cookies",
+                "custom_path": "custom browser cookies",
                 "firefox": "Firefox cookies",
                 "chrome": "Chrome cookies",
+                "edge": "Edge cookies",
                 "no_cookies": "no cookies (public video)"
             }
             
@@ -389,7 +387,7 @@ async def handle_download(arguments: dict):
                 if 'Merging formats into' in line or 'has already been downloaded' in line:
                     # Extract filename from merger message
                     if '"' in line:
-                        filename = line.split('"')[1].split('/')[-1]
+                        filename = line.split('"')[1].split('/')[-1].split('\\')[-1]
                         break
             
             result_msg = f"✅ Download complete! (using {method_names.get(method, method)})\n📁 Saved in {DOWNLOAD_DIR}"
@@ -402,14 +400,15 @@ async def handle_download(arguments: dict):
             if "403" in stderr or "HTTP Error 403" in stderr:
                 return [TextContent(type="text", text=f"❌ Download failed with 403 Forbidden error.\n\n"
                     f"Suggestions:\n"
-                    f"1. Make sure you're logged into YouTube in your Zen Browser, Firefox, or Chrome\n"
+                    f"1. Make sure you're logged into YouTube in Firefox, Chrome, or Edge\n"
                     f"2. Wait a few minutes and try again (rate limiting)\n"
                     f"3. Update yt-dlp: pip install -U yt-dlp\n"
                     f"4. Try watching the video in your browser first\n\n"
                     f"Tried all cookie sources:\n"
-                    f"✗ Custom path (Zen Browser)\n"
+                    f"✗ Custom path\n"
                     f"✗ Firefox\n"
                     f"✗ Chrome\n"
+                    f"✗ Edge\n"
                     f"✗ No cookies\n\n"
                     f"Error details: {stderr}")]
             
@@ -434,162 +433,13 @@ async def handle_audio_download(arguments: dict):
         
         if success:
             method_names = {
-                "custom_path": "Zen Browser cookies",
+                "custom_path": "custom browser cookies",
                 "firefox": "Firefox cookies",
                 "chrome": "Chrome cookies",
+                "edge": "Edge cookies",
                 "no_cookies": "no cookies (public video)"
             }
-            return [TextContent(type="text", text=f"🎵 Audio download complete! (using {method_names.get(method, method)})\n"
-                f"📁 Saved in {DOWNLOAD_DIR}\n{stdout}")]
-        else:
-            return [TextContent(type="text", text=f"❌ Audio download failed after trying all cookie sources.\n"
-                f"Error: {stderr}")]
-        
-    except Exception as e:
-        return [TextContent(type="text", text=f"Exception: {str(e)}")]
-
-async def handle_video_info(arguments: dict):
-    """Get detailed information about a YouTube video"""
-    url = arguments.get("url")
-    
-    if not url:
-        return [TextContent(type="text", text="Error: 'url' argument is required.")]
-    
-    try:
-        cmd_args = get_base_ytdlp_args(use_oauth=False) + [
-            "--dump-json",
-            "--no-playlist",
-            url
-        ]
-        
-        process = await asyncio.create_subprocess_exec(
-            *cmd_args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        
-        stdout, stderr = await process.communicate()
-        
-        if process.returncode != 0:
-            error_msg = stderr.decode() if stderr else "Unknown error"
-            return [TextContent(type="text", text=f"Failed to get video info. Error: {error_msg}")]
-        
-        video_info = json.loads(stdout.decode())
-        
-        title = video_info.get("title", "Unknown")
-        uploader = video_info.get("uploader", "Unknown")
-        duration = video_info.get("duration_string", "Unknown")
-        views = video_info.get("view_count", 0)
-        likes = video_info.get("like_count", 0)
-        description = video_info.get("description", "No description")[:500]
-        upload_date = video_info.get("upload_date", "Unknown")
-        
-        if upload_date != "Unknown" and len(upload_date) == 8:
-            upload_date = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:]}"
-        
-        formats = video_info.get("formats", [])
-        resolutions = set()
-        for fmt in formats:
-            height = fmt.get("height")
-            if height:
-                resolutions.add(f"{height}p")
-        
-        output = f"📹 **{title}**\n\n"
-        output += f"👤 Uploader: {uploader}\n"
-        output += f"📅 Upload Date: {upload_date}\n"
-        output += f"⏱️ Duration: {duration}\n"
-        output += f"👁️ Views: {views:,}\n"
-        output += f"👍 Likes: {likes:,}\n"
-        output += f"🎬 Available Resolutions: {', '.join(sorted(resolutions, key=lambda x: int(x.replace('p', '')), reverse=True))}\n\n"
-        output += f"📝 Description (preview):\n{description}...\n"
-        
-        return [TextContent(type="text", text=output)]
-        
-    except Exception as e:
-        return [TextContent(type="text", text=f"Exception: {str(e)}")]
-
-async def handle_display_control(arguments: dict):
-    """Handle display control requests (brightness, contrast, input switching)"""
-    action = arguments.get("action")
-    
-    if not action:
-        return [TextContent(type="text", text="Error: 'action' argument is required.")]
-    
-    try:
-        if action == "brightness":
-            brightness = arguments.get("brightness")
             
-            if brightness is None:
-                return [TextContent(type="text", text="Error: 'brightness' value is required for brightness action.")]
-            
-            contrast = arguments.get("contrast", brightness)
-            
-            brightness = max(0, min(100, brightness))
-            contrast = max(0, min(100, contrast))
-            
-            cmd_args = ["displayctl", str(brightness), str(contrast)]
-            
-            process = await asyncio.create_subprocess_exec(
-                *cmd_args,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            
-            stdout, stderr = await process.communicate()
-            
-            if process.returncode != 0:
-                error_msg = stderr.decode() if stderr else "Unknown error"
-                return [TextContent(type="text", text=f"Failed to set brightness/contrast. Error: {error_msg}")]
-            
-            output = stdout.decode() if stdout else ""
-            return [TextContent(type="text", text=f"✅ Display settings updated!\n🔆 Brightness: {brightness}\n🎨 Contrast: {contrast}\n{output}")]
-        
-        elif action == "switch_input":
-            input_source = arguments.get("input_source")
-            
-            if not input_source:
-                return [TextContent(type="text", text="Error: 'input_source' is required for switch_input action.")]
-            
-            input_source = input_source.lower()
-            
-            if input_source not in ["hdmi", "vga"]:
-                return [TextContent(type="text", text=f"Error: Invalid input source '{input_source}'. Must be 'hdmi' or 'vga'.")]
-            
-            cmd_args = ["displayctl", input_source]
-            
-            process = await asyncio.create_subprocess_exec(
-                *cmd_args,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            
-            stdout, stderr = await process.communicate()
-            
-            if process.returncode != 0:
-                error_msg = stderr.decode() if stderr else "Unknown error"
-                return [TextContent(type="text", text=f"Failed to switch input. Error: {error_msg}")]
-            
-            output = stdout.decode() if stdout else ""
-            return [TextContent(type="text", text=f"✅ Display input switched to {input_source.upper()}!\n{output}")]
-        
-        else:
-            return [TextContent(type="text", text=f"Error: Unknown action '{action}'.")]
-            
-    except FileNotFoundError:
-        return [TextContent(type="text", text="Error: 'displayctl' command not found. Please ensure it is installed and in your PATH.")]
-    except Exception as e:
-        return [TextContent(type="text", text=f"Exception during display control: {str(e)}")]
-
-# ----------------------
-# 3. Entry point
-# ----------------------
-async def main():
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(
-            read_stream,
-            write_stream,
-            server.create_initialization_options()
-        )
-
-if __name__ == "__main__":
-    asyncio.run(main())
+            # Extract only the filename from stdout
+            filename = None
+            for line in
