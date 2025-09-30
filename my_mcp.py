@@ -442,4 +442,94 @@ async def handle_audio_download(arguments: dict):
             
             # Extract only the filename from stdout
             filename = None
-            for line in
+            for line in stdout.split('\n'):
+                if 'Destination:' in line or 'has already been downloaded' in line:
+                    if '/' in line or '\\' in line:
+                        filename = line.split('/')[-1].split('\\')[-1].strip()
+                        break
+            
+            result_msg = f"🎵 Audio download complete! (using {method_names.get(method, method)})\n📁 Saved in {DOWNLOAD_DIR}"
+            if filename:
+                result_msg += f"\n📄 File: {filename}"
+            
+            return [TextContent(type="text", text=result_msg)]
+        else:
+            return [TextContent(type="text", text=f"❌ Audio download failed after trying all cookie sources.\n"
+                f"Error: {stderr}")]
+        
+    except Exception as e:
+        return [TextContent(type="text", text=f"Exception: {str(e)}")]
+
+async def handle_video_info(arguments: dict):
+    """Get detailed information about a YouTube video"""
+    url = arguments.get("url")
+    
+    if not url:
+        return [TextContent(type="text", text="Error: 'url' argument is required.")]
+    
+    try:
+        cmd_args = get_base_ytdlp_args(use_oauth=False) + [
+            "--dump-json",
+            "--no-playlist",
+            url
+        ]
+        
+        process = await asyncio.create_subprocess_exec(
+            *cmd_args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        
+        stdout, stderr = await process.communicate()
+        
+        if process.returncode != 0:
+            error_msg = stderr.decode() if stderr else "Unknown error"
+            return [TextContent(type="text", text=f"Failed to get video info. Error: {error_msg}")]
+        
+        video_info = json.loads(stdout.decode())
+        
+        title = video_info.get("title", "Unknown")
+        uploader = video_info.get("uploader", "Unknown")
+        duration = video_info.get("duration_string", "Unknown")
+        views = video_info.get("view_count", 0)
+        likes = video_info.get("like_count", 0)
+        description = video_info.get("description", "No description")[:500]
+        upload_date = video_info.get("upload_date", "Unknown")
+        
+        if upload_date != "Unknown" and len(upload_date) == 8:
+            upload_date = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:]}"
+        
+        formats = video_info.get("formats", [])
+        resolutions = set()
+        for fmt in formats:
+            height = fmt.get("height")
+            if height:
+                resolutions.add(f"{height}p")
+        
+        output = f"📹 **{title}**\n\n"
+        output += f"👤 Uploader: {uploader}\n"
+        output += f"📅 Upload Date: {upload_date}\n"
+        output += f"⏱️ Duration: {duration}\n"
+        output += f"👁️ Views: {views:,}\n"
+        output += f"👍 Likes: {likes:,}\n"
+        output += f"🎬 Available Resolutions: {', '.join(sorted(resolutions, key=lambda x: int(x.replace('p', '')), reverse=True))}\n\n"
+        output += f"📝 Description (preview):\n{description}...\n"
+        
+        return [TextContent(type="text", text=output)]
+        
+    except Exception as e:
+        return [TextContent(type="text", text=f"Exception: {str(e)}")]
+
+# ----------------------
+# 3. Entry point
+# ----------------------
+async def main():
+    async with stdio_server() as (read_stream, write_stream):
+        await server.run(
+            read_stream,
+            write_stream,
+            server.create_initialization_options()
+        )
+
+if __name__ == "__main__":
+    asyncio.run(main())
